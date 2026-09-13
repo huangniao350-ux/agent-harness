@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.agent_data/
+.idea/
+.vscode/
+.DS_Store
+docs/interview-guide.md
+.agent_workspace/
+traces_export/
