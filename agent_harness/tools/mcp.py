@@ -223,12 +223,24 @@ class MCPClientSession:
         return self._server_info
 
     async def close(self) -> None:
-        if self._proc and self._proc.returncode is None:
+        if self._proc is None:
+            return
+        # 1) 先关 stdin：stdio 服务端读到 EOF 自然退出，避免 Windows 下
+        #    TerminateProcess 硬杀导致管道收不到 EOF；
+        # 2) 等待退出，超时兜底 terminate；
+        # 3) 显式关闭子进程传输（连带 stdin/stdout 管道传输）——否则传输对象
+        #    会在事件循环关闭后被 GC 析构，Windows Proactor 下触发
+        #    "Event loop is closed" 告警。
+        if self._proc.stdin is not None:
+            self._proc.stdin.close()
+        if self._proc.returncode is None:
             try:
-                self._proc.terminate()
                 await asyncio.wait_for(self._proc.wait(), timeout=3)
-            except (ProcessLookupError, asyncio.TimeoutError):
-                self._proc.kill()
+            except asyncio.TimeoutError:
+                self._proc.terminate()
+        transport = getattr(self._proc, "_transport", None)
+        if transport is not None:
+            transport.close()
 
 
 class MCPToolAdapter(BaseTool):

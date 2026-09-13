@@ -22,12 +22,16 @@ def runtime():
     cfg.data_dir = tmp / "data"
     cfg.workspace_dir = tmp / "workspace"
     rt = AgentRuntime(cfg)
-
-    async def _start():
-        await rt.startup()
-    asyncio.run(_start())
-    yield rt
-    shutil.rmtree(tmp, ignore_errors=True)
+    # startup/close 必须共用同一条事件循环：MCP 子进程传输只能在它所属的
+    # 循环关闭前显式清理，否则 GC 会在已关闭的循环上触发 __del__ 告警
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(rt.startup())
+        yield rt
+        loop.run_until_complete(rt.close())
+    finally:
+        loop.close()
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def _run(rt, goal, mode=MODE_REACT, session=None):
