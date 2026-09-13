@@ -4,6 +4,8 @@ version = "0.1.0"
 description = "AgentHarness - 企业级 Agent 平台核心能力演示：ReAct/Plan-and-Execute 双模式 Harness、Multi-Agent 协同、统一 Tool Registry + MCP、三层 Memory、Guardrails、Trace/Replay 评估"
 requires-python = ">=3.10"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 # 核心零依赖：仅使用 Python 标准库（asyncio/sqlite3/json/urllib 等）
 dependencies = []
 
@@ -15,7 +17,7 @@ dev = ["pytest>=8.0"]
 agent-harness = "agent_harness.cli:main"
 
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]

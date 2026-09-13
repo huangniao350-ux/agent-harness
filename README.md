@@ -284,3 +284,7 @@ python -m agent_harness eval        # 240 任务评测：当前 240/240 通过
 - 可观测：内置 Trace → OpenTelemetry / Langfuse 导出（事件结构已对齐）
 - 安全：规则护栏 → 规则 + 分类模型混合；工具沙箱化与权限分级
 - 编排：单进程 asyncio → 分布式任务队列（步骤级幂等已具备：工具去重 + Checkpoint）
+
+## 许可证
+
+MIT —— 见 [LICENSE](LICENSE)。
