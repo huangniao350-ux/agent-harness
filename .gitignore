@@ -11,5 +11,6 @@ venv/
 .vscode/
 .DS_Store
 docs/interview-guide.md
+gui-test-screenshots/
 .agent_workspace/
 traces_export/

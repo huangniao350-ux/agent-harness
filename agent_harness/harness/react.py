@@ -89,7 +89,12 @@ class ReActAgent:
         started = time.perf_counter()
         resp = await self.llm.chat(messages, json_mode=json_mode, role=role)
         latency = (time.perf_counter() - started) * 1000
-        state.tokens_used += resp.usage.total_tokens
+        state.llm_calls += 1
+        state.ttft_total_ms += resp.ttft_ms or latency
+        if resp.cached:
+            state.cache_hits += 1  # 缓存命中：本次调用零 Token 成本，不计入 tokens_used
+        else:
+            state.tokens_used += resp.usage.total_tokens
         if self.event_bus is not None:
             await self.event_bus.emit(Event(type=LLM_CALL, trace_id=ctx.trace_id,
                                             session_id=ctx.session_id, payload={
@@ -97,7 +102,9 @@ class ReActAgent:
                                                 "content": truncate(resp.content, 2000),
                                                 "prompt_tokens": resp.usage.prompt_tokens,
                                                 "completion_tokens": resp.usage.completion_tokens,
-                                                "latency_ms": round(latency, 1)}))
+                                                "latency_ms": round(latency, 1),
+                                                "ttft_ms": round(resp.ttft_ms, 1),
+                                                "cached": resp.cached}))
         return resp
 
     async def run(self, state: AgentState, ctx: ToolContext, memory=None,

@@ -60,6 +60,13 @@ class AgentRuntime:
         self.traces = TraceDB(self.config.db_path)
         if self.config.trace_enabled:
             self.event_bus.subscribe(TraceSubscriber(self.traces))
+        # 高危操作确认门（auto：自动批准留痕；manual：等待人工决定）
+        from .tools.confirmation import ConfirmationGate
+        self.confirmation_gate = ConfirmationGate(
+            mode=self.config.harness.confirm_mode, event_bus=self.event_bus,
+            audit_path=self.config.data_dir / "audit.jsonl",
+            timeout_s=self.config.harness.confirm_timeout_s)
+        self.registry.confirmation_gate = self.confirmation_gate
         # 编排器装配
         self.react = ReActAgent(self.llm, self.registry, self.config, self.event_bus)
         self.verifier = Verifier(self.llm)
@@ -94,7 +101,7 @@ class AgentRuntime:
 
     # ------------------------------------------------------------ 主入口
     async def run(self, goal: str, mode: str = MODE_REACT, session_id: str | None = None,
-                  resume: bool = False, policy=None) -> AgentResult:
+                  resume: bool = False, policy=None, confirm: str | None = None) -> AgentResult:
         started = time.perf_counter()
         session_id = session_id or f"s-{uuid.uuid4().hex[:8]}"
         trace_id = uuid.uuid4().hex[:12]
@@ -102,10 +109,10 @@ class AgentRuntime:
         memory = self.memory_for(session_id)
         ctx = ToolContext(session_id=session_id, workspace_dir=self.config.workspace_dir,
                           memory=memory, event_bus=self.event_bus, trace_id=trace_id,
-                          config=self.config)
+                          config=self.config, confirm_mode=confirm)
 
         # 1. 输入护栏
-        verdict = self.guardrails.check_input(goal)
+        verdict = await self.guardrails.check_input(goal)
         if verdict.action == "block":
             rules = "、".join(v["rule"] for v in verdict.violations)
             await self._emit(ctx, TASK_STARTED, {"goal": goal, "mode": mode, "blocked": True})
@@ -145,7 +152,7 @@ class AgentRuntime:
 
         # 4. 输出护栏
         answer = final_state.final_answer
-        out_verdict = self.guardrails.check_output(answer or "")
+        out_verdict = await self.guardrails.check_output(answer or "")
         if out_verdict.action == "block":
             answer = "（输出已被安全护栏拦截：检测到疑似敏感信息泄露，详情见审计日志）"
         elif out_verdict.action == "mask":
@@ -163,12 +170,14 @@ class AgentRuntime:
         await self._emit(ctx, FINAL_ANSWER, {"answer": answer, "status": final_state.status})
         await self._finish(ctx, started, state=final_state, answer=answer,
                            status=final_state.status)
+        ttft_avg = (final_state.ttft_total_ms / final_state.llm_calls) if final_state.llm_calls else 0.0
         return AgentResult(session_id=session_id, trace_id=trace_id, goal=goal, mode=mode,
                            answer=answer or "", success=success, steps=final_state.steps_used,
                            tool_calls=final_state.tool_calls,
                            tokens_used=final_state.tokens_used,
                            latency_ms=self._latency(started), plan=final_state.plan,
-                           error=final_state.error)
+                           error=final_state.error, ttft_ms=round(ttft_avg, 1),
+                           cache_hits=final_state.cache_hits)
 
     # ------------------------------------------------------------ 辅助
     async def _extract_facts(self, goal: str, memory: MemoryManager) -> None:

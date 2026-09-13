@@ -18,6 +18,7 @@ class LLMConfig:
     cheap_model: str = ""          # 模型路由：简单步骤用便宜模型，为空则复用 model
     temperature: float = 0.2
     timeout_s: float = 60.0
+    enable_response_cache: bool = True   # 精确匹配的 LLM 响应缓存（成本管控）
 
     def model_for_role(self, role: str) -> str:
         """模型路由策略：规划/校验用强模型，普通执行步骤用便宜模型（成本管控）。"""
@@ -35,6 +36,8 @@ class HarnessConfig:
     tool_retries: int = 2             # 可重试错误的最大尝试次数
     checkpoint_enabled: bool = True
     parallel_workers: int = 3         # 并行步骤的信号量上限
+    confirm_mode: str = "auto"        # 高危操作确认门：auto（自动批准留痕）| manual（等待人工决定）
+    confirm_timeout_s: float = 120.0  # manual 模式下等待人工决定的超时（超时自动拒绝）
 
 
 @dataclass
@@ -79,6 +82,10 @@ class RuntimeConfig:
         cfg.guardrails_enabled = os.environ.get("AGENT_GUARDRAILS", "1") not in ("0", "false")
         cfg.enable_mcp = os.environ.get("AGENT_ENABLE_MCP", "1") not in ("0", "false")
         cfg.trace_enabled = os.environ.get("AGENT_TRACE", "1") not in ("0", "false")
+        cfg.llm.enable_response_cache = os.environ.get("AGENT_LLM_CACHE", "1") not in ("0", "false")
+        cfg.harness.confirm_mode = os.environ.get("AGENT_CONFIRM", cfg.harness.confirm_mode).lower()
+        cfg.harness.confirm_timeout_s = float(os.environ.get("AGENT_CONFIRM_TIMEOUT",
+                                                             cfg.harness.confirm_timeout_s))
         cfg.harness.max_react_steps = int(os.environ.get("AGENT_MAX_STEPS", cfg.harness.max_react_steps))
         cfg.data_dir = Path(os.environ.get("AGENT_DATA_DIR", ".agent_data"))
         cfg.workspace_dir = Path(os.environ.get("AGENT_WORKSPACE_DIR", ".agent_workspace"))

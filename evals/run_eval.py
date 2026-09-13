@@ -60,7 +60,9 @@ async def _run_task(runtime: AgentRuntime, task: dict, idx: int) -> TaskOutcome:
                        steps=last_result.steps if last_result else 0,
                        latency_ms=last_result.latency_ms if last_result else 0,
                        tokens=last_result.tokens_used if last_result else 0,
-                       answer=answer, error=error)
+                       answer=answer, error=error,
+                       ttft_ms=last_result.ttft_ms if last_result else 0.0,
+                       cache_hits=last_result.cache_hits if last_result else 0)
 
 
 def _failure_reason(result, keywords: list[str], answer: str) -> str:

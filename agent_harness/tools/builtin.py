@@ -190,6 +190,7 @@ class LeaveApplyTool(BaseTool):
         "required": ["employee_name", "leave_type", "days", "start_date"],
         "additionalProperties": False}
     timeout_s = 4.0
+    risk_level = "high"  # 高危写操作：提交请假需过人工确认门
 
     async def run(self, args, ctx):
         name = args["employee_name"].strip()
@@ -233,6 +234,7 @@ class SendEmailTool(BaseTool):
         "body": {"type": "string"}},
         "required": ["to", "subject", "body"], "additionalProperties": False}
     timeout_s = 4.0
+    risk_level = "high"  # 高危写操作：对外发信需过人工确认门
 
     async def run(self, args, ctx):
         outbox = Path(ctx.workspace_dir or ".") / "outbox.jsonl"
@@ -265,6 +267,7 @@ class FileWriteTool(BaseTool):
         "path": {"type": "string"}, "content": {"type": "string"}},
         "required": ["path", "content"], "additionalProperties": False}
     timeout_s = 3.0
+    risk_level = "high"  # 高危写操作：写入文件需过人工确认门
 
     async def run(self, args, ctx):
         path = _safe_path(ctx, args["path"])

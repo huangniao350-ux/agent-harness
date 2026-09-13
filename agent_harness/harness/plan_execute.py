@@ -29,6 +29,16 @@ class PlanExecuteAgent:
         self.config = config
         self.event_bus = event_bus
 
+    @staticmethod
+    def _absorb_llm_stats(state: AgentState, resp) -> None:
+        """把一次 planner/synthesizer 级 LLM 调用计入状态（与 ReAct actor 口径一致）。"""
+        state.llm_calls += 1
+        state.ttft_total_ms += resp.ttft_ms or 0.0
+        if resp.cached:
+            state.cache_hits += 1
+        else:
+            state.tokens_used += resp.usage.total_tokens
+
     # ------------------------------------------------------------ 规划
     async def _make_plan(self, state: AgentState, ctx: ToolContext) -> list[dict]:
         tool_lines = "\n".join(f"- {t.name}: {t.description}" for t in self.react.registry.list_tools())
@@ -40,7 +50,7 @@ class PlanExecuteAgent:
             LLMMessage(role="user",
                        content=f"目标：{state.goal}\n可用工具：\n{tool_lines}{feedback}"),
         ], json_mode=True, role="planner")
-        state.tokens_used += resp.usage.total_tokens
+        self._absorb_llm_stats(state, resp)
         if self.event_bus is not None:
             await self.event_bus.emit(Event(type=LLM_CALL, trace_id=ctx.trace_id,
                                             session_id=ctx.session_id, payload={
@@ -48,7 +58,9 @@ class PlanExecuteAgent:
                                                 "content": truncate(resp.content, 2000),
                                                 "prompt_tokens": resp.usage.prompt_tokens,
                                                 "completion_tokens": resp.usage.completion_tokens,
-                                                "latency_ms": 0}))
+                                                "latency_ms": 0,
+                                                "ttft_ms": round(resp.ttft_ms, 1),
+                                                "cached": resp.cached}))
         data = extract_json(resp.content) or {}
         steps = data.get("steps") if isinstance(data, dict) else None
         return self._validate_plan(steps or [])
@@ -109,6 +121,11 @@ class PlanExecuteAgent:
         await self.react.run(sub_state, ctx, memory=memory,
                              max_steps=self.config.harness.max_step_react_steps if self.config else 4)
         ok = sub_state.status == STATUS_DONE and bool(sub_state.final_answer)
+        # 步数/TTFT/缓存口径：子步骤的 LLM 调用计入总任务（steps 按子步骤实际推理步数累计）
+        state.steps_used += max(1, sub_state.steps_used)
+        state.llm_calls += sub_state.llm_calls
+        state.ttft_total_ms += sub_state.ttft_total_ms
+        state.cache_hits += sub_state.cache_hits
         state.tokens_used += sub_state.tokens_used
         state.tool_calls.extend(sub_state.tool_calls)
         return {"step": step, "ok": ok, "result": sub_state.final_answer or sub_state.error,
@@ -207,5 +224,5 @@ class PlanExecuteAgent:
                                 "直接给用户，不要复述步骤编号。")),
             LLMMessage(role="user", content=f"目标：{state.goal}\n各步骤结果：\n{results}"),
         ], role="synthesizer")
-        state.tokens_used += resp.usage.total_tokens
+        self._absorb_llm_stats(state, resp)
         return resp.content.strip()

@@ -18,11 +18,14 @@ import asyncio
 import json
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from ..config import RuntimeConfig
 from ..events import Event
 from ..harness.state import MODE_PLAN_EXECUTE, MODE_MULTI_AGENT, MODE_REACT
 from ..runtime import AgentRuntime
+
+_WEB_DIR = Path(__file__).parent / "static"
 
 # 全局单例运行时（演示用单进程；生产按 worker 隔离）
 _runtime: AgentRuntime | None = None
@@ -49,14 +52,35 @@ def create_app():
 
     app = FastAPI(title="AgentHarness API", version="0.1.0", lifespan=lifespan)
 
+    @app.get("/", include_in_schema=False)
+    async def index():
+        """Harness 开发者控制台（面向平台研发/排查）。"""
+        from fastapi.responses import HTMLResponse
+        return HTMLResponse((_WEB_DIR / "console.html").read_text(encoding="utf-8"),
+                            headers={"Cache-Control": "no-cache"})
+
     class RunRequest(BaseModel):
         goal: str
         mode: str = MODE_REACT
         session_id: str | None = None
+        confirm: str | None = None   # 高危操作确认门模式覆盖：auto | manual | off
+
+    class ConfirmRequest(BaseModel):
+        request_id: str
+        approve: bool
 
     @app.get("/health")
     async def health():
         return {"status": "ok", "llm_provider": get_runtime().config.llm.provider}
+
+    @app.post("/v1/agent/confirm")
+    async def confirm(req: ConfirmRequest):
+        """人工确认门决定接口：对 confirmation_request 事件中的 request_id 批准/拒绝。"""
+        ok = get_runtime().confirmation_gate.decide(req.request_id, req.approve)
+        if not ok:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=404, detail="确认请求不存在或已处理")
+        return {"request_id": req.request_id, "approved": req.approve}
 
     @app.get("/v1/tools")
     async def tools():
@@ -84,7 +108,8 @@ def create_app():
 
         async def event_stream():
             task = asyncio.create_task(runtime.run(req.goal, mode=req.mode,
-                                                   session_id=session_id))
+                                                   session_id=session_id,
+                                                   confirm=req.confirm))
             try:
                 yield _sse("session", {"session_id": session_id})
                 while True:

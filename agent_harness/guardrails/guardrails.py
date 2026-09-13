@@ -73,7 +73,7 @@ class Guardrails:
         self.event_bus = event_bus
 
     # ------------------------------------------------------------ 输入护栏
-    def check_input(self, text: str) -> GuardrailVerdict:
+    async def check_input(self, text: str) -> GuardrailVerdict:
         if not self.enabled:
             return GuardrailVerdict(action="allow", text=text)
         violations: list[dict] = []
@@ -82,18 +82,18 @@ class Guardrails:
             if re.search(pattern, text, re.IGNORECASE):
                 violations.append({"type": "prompt_injection", "rule": name})
         if violations:
-            self._record("input", "block", violations, text)
+            await self._record("input", "block", violations, text)
             return GuardrailVerdict(action="block", text=text, violations=violations)
         # 2. 敏感信息 → 脱敏放行
         masked, mask_hits = _mask_sensitive(text)
         if mask_hits:
             violations.extend(mask_hits)
-            self._record("input", "mask", violations, text)
+            await self._record("input", "mask", violations, text)
             return GuardrailVerdict(action="mask", text=masked, violations=violations)
         return GuardrailVerdict(action="allow", text=text)
 
     # ------------------------------------------------------------ 输出护栏
-    def check_output(self, text: str) -> GuardrailVerdict:
+    async def check_output(self, text: str) -> GuardrailVerdict:
         if not self.enabled:
             return GuardrailVerdict(action="allow", text=text)
         violations: list[dict] = []
@@ -101,26 +101,22 @@ class Guardrails:
             if re.search(pattern, text, re.IGNORECASE):
                 violations.append({"type": "leak", "rule": name})
         if violations:
-            self._record("output", "block", violations, text)
+            await self._record("output", "block", violations, text)
             return GuardrailVerdict(action="block", text=text, violations=violations)
         masked, mask_hits = _mask_sensitive(text)
         if mask_hits:
             violations.extend(mask_hits)
-            self._record("output", "mask", violations, text)
+            await self._record("output", "mask", violations, text)
             return GuardrailVerdict(action="mask", text=masked, violations=violations)
         return GuardrailVerdict(action="allow", text=text)
 
     # ------------------------------------------------------------ 内部
-    def _record(self, stage: str, action: str, violations: list[dict], sample: str) -> None:
+    async def _record(self, stage: str, action: str, violations: list[dict], sample: str) -> None:
         self.audit.log(stage, action, violations, sample)
         if self.event_bus is not None:
-            import asyncio
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                return
-            loop.create_task(self.event_bus.emit(Event(
-                type=GUARDRAIL, payload={"stage": stage, "action": action, "violations": violations})))
+            # 同步 await 广播：保证事件到达顺序与决策顺序一致（不允许乱序延迟到后续任务）
+            await self.event_bus.emit(Event(
+                type=GUARDRAIL, payload={"stage": stage, "action": action, "violations": violations}))
 
 
 def _mask_sensitive(text: str) -> tuple[str, list[dict]]:

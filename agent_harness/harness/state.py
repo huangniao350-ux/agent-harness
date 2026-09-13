@@ -31,6 +31,9 @@ class AgentState:
     tool_calls: list[dict[str, Any]] = field(default_factory=list)   # {tool, args, ok}
     tokens_used: int = 0
     steps_used: int = 0
+    llm_calls: int = 0                                               # LLM 调用次数（含子步骤）
+    ttft_total_ms: float = 0.0                                       # TTFT 累计（求平均用）
+    cache_hits: int = 0                                              # LLM 响应缓存命中次数
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -58,6 +61,8 @@ class AgentResult:
     latency_ms: float
     plan: list[dict[str, Any]] = field(default_factory=list)
     error: str = ""
+    ttft_ms: float = 0.0        # 平均首字延迟（LLM 调用级）
+    cache_hits: int = 0         # LLM 响应缓存命中次数
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

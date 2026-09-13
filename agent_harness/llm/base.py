@@ -33,6 +33,8 @@ class LLMResponse:
     model: str = ""
     usage: TokenUsage = field(default_factory=TokenUsage)
     finish_reason: str = "stop"
+    ttft_ms: float = 0.0        # TTFT：从发起调用到首个 token 可用的时间（首字延迟）
+    cached: bool = False        # 命中响应缓存时为 True（本次调用零 Token 成本）
 
 
 class LLMError(Exception):

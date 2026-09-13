@@ -27,15 +27,21 @@ class OpenAICompatClient(LLMClient):
     def _model_for_role(self, role: str) -> str:
         return self.model if role in ("planner", "verifier", "synthesizer") else self.cheap_model
 
-    def _request(self, payload: dict) -> dict:
+    def _request(self, payload: dict) -> tuple[dict, float]:
+        """同步请求；返回 (响应体, TTFB 毫秒) —— TTFB 即非流式场景下的 TTFT 近似。"""
         req = urllib.request.Request(
             f"{self.api_base}/chat/completions",
             data=json.dumps(payload).encode("utf-8"),
             headers={"Content-Type": "application/json", "Authorization": f"Bearer {self.api_key}"},
             method="POST",
         )
+        import time
+        started = time.perf_counter()
         with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+            first = resp.read(1)  # 首字节到达即视为首 token 可用
+            ttft_ms = (time.perf_counter() - started) * 1000
+            rest = resp.read()
+        return json.loads((first + rest).decode("utf-8")), ttft_ms
 
     async def chat(self, messages, *, json_mode: bool = False, role: str = "default", **_) -> LLMResponse:
         msgs = normalize_messages(messages)
@@ -49,7 +55,7 @@ class OpenAICompatClient(LLMClient):
             payload["response_format"] = {"type": "json_object"}
         loop = asyncio.get_running_loop()
         try:
-            data = await loop.run_in_executor(None, self._request, payload)
+            data, ttft_ms = await loop.run_in_executor(None, self._request, payload)
         except urllib.error.HTTPError as exc:
             raise LLMError(f"LLM HTTP {exc.code}: {exc.reason}") from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
@@ -64,7 +70,8 @@ class OpenAICompatClient(LLMClient):
         usage.prompt_tokens = usage_raw.get("prompt_tokens", usage.prompt_tokens)
         usage.completion_tokens = usage_raw.get("completion_tokens", usage.completion_tokens)
         return LLMResponse(content=content, model=data.get("model", self.model),
-                           usage=usage, finish_reason=choice.get("finish_reason", "stop"))
+                           usage=usage, finish_reason=choice.get("finish_reason", "stop"),
+                           ttft_ms=round(ttft_ms, 1))
 
     async def stream(self, messages, *, role: str = "default", **_):
         """SSE 流式增量输出（供 API 服务透传给前端）。"""

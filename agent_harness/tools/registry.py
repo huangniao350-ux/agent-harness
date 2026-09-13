@@ -24,6 +24,7 @@ class ToolRegistry:
         self._mcp_sessions: list[Any] = []      # 保持 MCP 子进程会话引用
         self._cache = ToolCallCache()
         self.config = config
+        self.confirmation_gate = None           # ConfirmationGate，由 Runtime 装配
 
     # ------------------------------------------------ 注册
     def register(self, tool: BaseTool, replace: bool = False) -> None:
@@ -76,8 +77,27 @@ class ToolRegistry:
             hints = ", ".join(t.name for t in self.list_tools()) or "（无）"
             return ToolResult(ok=False, error=f"未知工具: {name}（可用工具: {hints}）",
                               meta={"stage": "registry"})
-        return await execute_tool(
+        # 高危操作确认门：写操作类工具执行前必须获得批准（决策留痕审计）
+        if getattr(tool, "risk_level", "low") == "high" and self.confirmation_gate is not None:
+            gate_mode = getattr(ctx, "confirm_mode", None) or self.confirmation_gate.mode
+            if gate_mode != "off":
+                decision = await self.confirmation_gate.confirm(tool, args, ctx, mode=gate_mode)
+                if not decision.approved:
+                    return ToolResult(
+                        ok=False,
+                        error=f"人工确认门拒绝：{decision.reason or '操作未被批准'}",
+                        meta={"stage": "confirmation", "tool": name, "confirmation": "rejected"})
+                confirmed_via = decision.via
+            else:
+                confirmed_via = None
+        else:
+            confirmed_via = None
+        result = await execute_tool(
             tool, args, ctx, cache=self._cache,
             default_timeout=getattr(self.config.harness, "tool_call_timeout_s", 10.0) if self.config else 10.0,
             default_retries=getattr(self.config.harness, "tool_retries", 2) if self.config else 2,
         )
+        if confirmed_via:
+            # 批准通过的高危调用在轨迹中标记确认来源（auto/prompt/user）
+            result.meta = {**result.meta, "confirmation": confirmed_via}
+        return result

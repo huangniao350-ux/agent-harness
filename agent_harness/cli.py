@@ -66,6 +66,8 @@ class ConsoleReporter:
             if p.get("ok"):
                 meta = p.get("meta", {})
                 notes = []
+                if meta.get("confirmation"):
+                    notes.append(f"确认门[{meta['confirmation']}]已批准")
                 if meta.get("dedup"):
                     notes.append("防重复调用命中缓存")
                 if meta.get("attempts", 1) > 1:
@@ -76,7 +78,16 @@ class ConsoleReporter:
                 print(_c(f"⚙ 工具 {p.get('tool')} {json.dumps(p.get('args', {}), ensure_ascii=False)}"
                          f" ({p.get('latency_ms')}ms)", _C_OK) + extra)
             else:
-                print(_c(f"⚙ 工具 {p.get('tool')} 失败: {p.get('error', '')}", _C_ERR))
+                meta = p.get("meta", {})
+                extra = _c(f"  ← 确认门[{meta.get('confirmation')}]拒绝", _C_WARN) \
+                    if meta.get("stage") == "confirmation" else ""
+                print(_c(f"⚙ 工具 {p.get('tool')} 失败: {p.get('error', '')}", _C_ERR) + extra)
+        elif t == "confirmation_request":
+            print(_c(f"⏸ 高危操作待确认: {p.get('tool')} {json.dumps(p.get('args', {}), ensure_ascii=False)}"
+                     f"（{p.get('note', '')}）", _C_WARN))
+        elif t == "confirmation_decided":
+            mark = "批准" if p.get("approved") else "拒绝"
+            print(_c(f"⏸ 确认门决定[{p.get('via')}]: {mark} {p.get('tool', '')}", _C_WARN))
         elif t == GUARDRAIL:
             rules = "、".join(v.get("rule", "") for v in p.get("violations", []))
             print(_c(f"⛨ 护栏[{p.get('stage')}] 动作={p.get('action')} 命中: {rules}", _C_WARN))
@@ -99,12 +110,21 @@ class ConsoleReporter:
 
 async def cmd_run(args) -> int:
     runtime = AgentRuntime()
+    if getattr(args, "confirm", None):
+        runtime.config.harness.confirm_mode = args.confirm
+    if args.confirm == "manual":
+        # CLI 交互式确认：在终端里询问操作者（阻塞等待输入，不占用事件循环）
+        async def _prompt(tool, tool_args, _ctx):
+            resp = await asyncio.to_thread(
+                input, f"\n⚠  人工确认门：高危工具 {tool.name} 参数 {tool_args}\n   批准执行? [y/N] ")
+            return resp.strip().lower() in ("y", "yes")
+        runtime.confirmation_gate.prompt = _prompt
     reporter = ConsoleReporter(verbose=args.verbose)
     runtime.event_bus.subscribe(reporter)
     await runtime.startup()
     try:
         result = await runtime.run(args.goal, mode=args.mode, session_id=args.session,
-                                   resume=args.resume)
+                                   resume=args.resume, confirm=args.confirm or None)
         if not result.success:
             print(_c(f"\n任务未成功: {result.error}", _C_ERR))
             return 1
@@ -246,6 +266,8 @@ def main() -> None:
                        choices=[MODE_REACT, MODE_PLAN_EXECUTE, MODE_MULTI_AGENT])
     p_run.add_argument("--session", default=None, help="会话ID（跨请求共享记忆）")
     p_run.add_argument("--resume", action="store_true", help="从该会话的 Checkpoint 续跑")
+    p_run.add_argument("--confirm", default=None, choices=["auto", "manual", "off"],
+                       help="高危操作确认门：auto=自动批准留痕 / manual=终端逐次确认 / off=关闭")
     p_run.add_argument("-v", "--verbose", action="store_true", help="输出 LLM 调用明细")
 
     p_demo = sub.add_parser("demo", help="运行全部内置演示场景")
@@ -265,7 +287,7 @@ def main() -> None:
 
     sub.add_parser("mcp-server", help="启动示例 MCP Server（stdio）")
 
-    sub.add_parser("selfcheck", help="运行 15 项核心能力自检")
+    sub.add_parser("selfcheck", help="运行 19 项核心能力自检")
 
     p_server = sub.add_parser("server", help="启动 FastAPI/SSE 服务")
     p_server.add_argument("--host", default="127.0.0.1")

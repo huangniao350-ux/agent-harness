@@ -92,7 +92,12 @@ class MultiAgentOrchestrator:
     async def _chat(self, messages: list[LLMMessage], state: AgentState, ctx: ToolContext,
                     role: str = "planner", json_mode: bool = False) -> str:
         resp = await self.llm.chat(messages, json_mode=json_mode, role=role)
-        state.tokens_used += resp.usage.total_tokens
+        state.llm_calls += 1
+        state.ttft_total_ms += resp.ttft_ms or 0.0
+        if resp.cached:
+            state.cache_hits += 1
+        else:
+            state.tokens_used += resp.usage.total_tokens
         if self.event_bus is not None:
             await self.event_bus.emit(Event(type=LLM_CALL, trace_id=ctx.trace_id,
                                             session_id=ctx.session_id, payload={
@@ -100,7 +105,9 @@ class MultiAgentOrchestrator:
                                                 "content": truncate(resp.content, 2000),
                                                 "prompt_tokens": resp.usage.prompt_tokens,
                                                 "completion_tokens": resp.usage.completion_tokens,
-                                                "latency_ms": 0}))
+                                                "latency_ms": 0,
+                                                "ttft_ms": round(resp.ttft_ms, 1),
+                                                "cached": resp.cached}))
         return resp.content
 
     # ------------------------------------------------------------ 规划与分工
@@ -147,6 +154,10 @@ class MultiAgentOrchestrator:
         await self.react.run(sub_state, ctx, memory=memory,
                              max_steps=self.config.harness.max_step_react_steps if self.config else 4,
                              system_extra=ROLE_PROMPTS[role])
+        state.steps_used += max(1, sub_state.steps_used)
+        state.llm_calls += sub_state.llm_calls
+        state.ttft_total_ms += sub_state.ttft_total_ms
+        state.cache_hits += sub_state.cache_hits
         state.tokens_used += sub_state.tokens_used
         state.tool_calls.extend(sub_state.tool_calls)
         await self._emit(ctx, AGENT_MESSAGE, {"from": role, "to": "verifier",

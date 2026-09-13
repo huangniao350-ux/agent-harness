@@ -41,13 +41,15 @@ class ToolContext:
     """工具执行上下文：会话隔离 + 依赖注入（内存、事件总线、工作区）。"""
 
     def __init__(self, session_id: str, workspace_dir=None, memory=None,
-                 event_bus=None, trace_id: str = "", config=None) -> None:
+                 event_bus=None, trace_id: str = "", config=None,
+                 confirm_mode: str | None = None) -> None:
         self.session_id = session_id
         self.workspace_dir = workspace_dir
         self.memory = memory
         self.event_bus = event_bus
         self.trace_id = trace_id
         self.config = config
+        self.confirm_mode = confirm_mode  # 本次 run 的确认门模式覆盖（auto/manual/off）
 
 
 class BaseTool:
@@ -60,6 +62,7 @@ class BaseTool:
     retries: int = 2                    # 可重试错误的最大尝试次数
     source: str = "in-process"          # in-process | mcp://xxx
     fallback: "BaseTool | None" = None  # 降级备用工具
+    risk_level: str = "low"             # low | high（high = 高危写操作，执行前过人工确认门）
 
     async def run(self, args: dict, ctx: ToolContext) -> ToolResult:  # pragma: no cover
         raise NotImplementedError

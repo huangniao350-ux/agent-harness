@@ -4,20 +4,26 @@ from __future__ import annotations
 
 from ..config import LLMConfig
 from .base import LLMClient, LLMError, LLMMessage, LLMResponse
+from .cache import LLMResponseCache
 from .mock import MockLLM
 
 
 def build_llm(config: LLMConfig) -> LLMClient:
     if config.provider == "mock":
-        return MockLLM()
-    if config.provider == "openai":
+        inner: LLMClient = MockLLM()
+    elif config.provider == "openai":
         from .openai_compat import OpenAICompatClient
-        return OpenAICompatClient(
+        inner = OpenAICompatClient(
             api_base=config.api_base, api_key=config.api_key, model=config.model,
             cheap_model=config.cheap_model, temperature=config.temperature,
             timeout_s=config.timeout_s,
         )
-    raise ValueError(f"未知 LLM provider: {config.provider}")
+    else:
+        raise ValueError(f"未知 LLM provider: {config.provider}")
+    if config.enable_response_cache:
+        return LLMResponseCache(inner)
+    return inner
 
 
-__all__ = ["build_llm", "MockLLM", "LLMClient", "LLMMessage", "LLMResponse", "LLMError"]
+__all__ = ["build_llm", "MockLLM", "LLMClient", "LLMMessage", "LLMResponse", "LLMError",
+           "LLMResponseCache"]

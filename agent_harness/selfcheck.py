@@ -1,7 +1,8 @@
 """快速自检（不依赖 pytest）：python -m agent_harness.selfcheck
 
 覆盖：MCP 接入、ReAct 工具链、RAG 检索、弹性执行（重试/降级）、护栏拦截、
-Plan-Execute 并行、多智能体、跨会话长期记忆。全部通过输出 PASS 并返回 0。
+Plan-Execute 并行、多智能体、跨会话长期记忆、人工确认门、LLM 响应缓存、
+TTFT/幻觉率指标。全部通过输出 PASS 并返回 0。
 """
 
 from __future__ import annotations
@@ -94,6 +95,52 @@ async def main() -> int:
         check("Trace 落库", len(runtime.traces.list_traces(limit=50)) >= 9)
         check("Checkpoint 生命周期（完成后清理）",
               all(row["session_id"] != "chk-ckpt" for row in rows), f"{len(rows)} 条活跃")
+
+        # 11. 人工确认门（auto：自动批准并留痕；manual：可拒绝）
+        audit_text = (config.data_dir / "audit.jsonl").read_text(encoding="utf-8")
+        check("确认门-高危操作自动批准留痕", '"stage": "confirm"' in audit_text
+              and '"via": "auto"' in audit_text)
+        from .llm.base import LLMMessage
+        from .tools.base import ToolContext
+        from .tools.confirmation import ConfirmationGate
+        gate = ConfirmationGate(mode="manual", event_bus=runtime.event_bus,
+                                audit_path=config.data_dir / "audit.jsonl", timeout_s=5)
+        req_ids: list[str] = []
+
+        async def _capture(event) -> None:
+            if event.type == "confirmation_request":
+                req_ids.append(event.payload["request_id"])
+        runtime.event_bus.subscribe(_capture)
+        ctx = ToolContext(session_id="chk-confirm", event_bus=runtime.event_bus)
+        pending = asyncio.create_task(gate.confirm(runtime.registry.get("send_email"),
+                                                   {"to": "x@demo.com"}, ctx))
+        await asyncio.sleep(0.05)
+        gate.decide(req_ids[-1], False)
+        decision = await pending
+        runtime.event_bus.unsubscribe(_capture)
+        check("确认门-人工拒绝路径", not decision.approved and decision.via == "user")
+
+        # 12. LLM 响应缓存（相同请求第二次零成本命中）
+        cache_msgs = [LLMMessage(role="system", content="[MODE: COMPRESS] 自检"),
+                      LLMMessage(role="user", content="缓存自检固定输入")]
+        first = await runtime.llm.chat(cache_msgs, role="default")
+        second = await runtime.llm.chat(cache_msgs, role="default")
+        check("LLM 响应缓存命中", not first.cached and second.cached
+              and second.usage.total_tokens == first.usage.total_tokens)
+
+        # 13. 评估指标（TTFT / 幻觉率）
+        from .observability.metrics import EvalReport, TaskOutcome
+        rep = EvalReport([
+            TaskOutcome(task_id="a", category="rag_qa", goal="g", success=True,
+                        expected_tools=[], used_tools=[], steps=1, latency_ms=1, tokens=1,
+                        answer="根据【员工手册·总则】规定……", ttft_ms=12.0),
+            TaskOutcome(task_id="b", category="rag_qa", goal="g", success=True,
+                        expected_tools=[], used_tools=[], steps=1, latency_ms=1, tokens=1,
+                        answer="这是一个没有任何依据的编造性回答", ttft_ms=8.0),
+        ])
+        s = rep.summary()
+        check("TTFT/幻觉率指标", "avg_ttft_ms" in s and s["hallucination_rate"] == 0.5,
+              f"幻觉率 {s['hallucination_rate']:.0%}")
     finally:
         await runtime.close()
         shutil.rmtree(tmp, ignore_errors=True)

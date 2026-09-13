@@ -411,6 +411,8 @@ class MockLLM:
     name = "mock"
 
     async def chat(self, messages, *, json_mode: bool = False, role: str = "default", **_) -> LLMResponse:
+        import time
+        started = time.perf_counter()
         msgs = normalize_messages(messages)
         sys_text = "\n".join(m.content for m in msgs if m.role == "system")
         user_text = "\n".join(m.content for m in msgs if m.role == "user")
@@ -431,4 +433,6 @@ class MockLLM:
         else:
             out = chat_dispatch(user_text)
         model = "mock-strong" if role in ("planner", "verifier", "synthesizer") else "mock-mini"
-        return LLMResponse(content=out, model=model, usage=usage_from_text(model, msgs, out))
+        ttft_ms = (time.perf_counter() - started) * 1000
+        return LLMResponse(content=out, model=model, usage=usage_from_text(model, msgs, out),
+                           ttft_ms=round(ttft_ms, 2))
